@@ -14,55 +14,81 @@
 
 ## Project Description
 
-In this project your goal is to safely navigate around a virtual highway with other traffic that is driving +-10 MPH of the 50 MPH speed limit. You will be provided the car's localization and sensor fusion data, there is also a sparse map list of waypoints around the highway. The car should try to go as close as possible to the 50 MPH speed limit, which means passing slower traffic when possible, note that other cars will try to change lanes too. The car should avoid hitting other cars at all cost as well as driving inside of the marked road lanes at all times, unless going from one lane to another. The car should be able to make one complete loop around the 6946m highway. Since the car is trying to go 50 MPH, it should take a little over 5 minutes to complete 1 loop. Also the car should not experience total acceleration over 10 m/s^2 and jerk that is greater than 50 m/s^3.
+In this project, your goal is to safely navigate around a virtual highway with other traffic that is driving +-10 MPH of the 50 MPH speed limit. You will be provided the car's localization and sensor fusion data, there is also a sparse map list of waypoints around the highway. The car should try to go as close as possible to the 50 MPH speed limit, which means passing slower traffic when possible, note that other cars will try to change lanes too. The car should avoid hitting other cars at all cost as well as driving inside of the marked road lanes at all times unless going from one lane to another. The car should be able to make one complete loop around the 6946m highway. Since the car is trying to go 50 MPH, it should take a little over 5 minutes to complete 1 loop. Also, the car should not experience total acceleration over 10 m/s^2 and jerk that is greater than 50 m/s^3.
 
-#### The map of the highway is in data/highway_map.txt
-Each waypoint in the list contains  [x,y,s,dx,dy] values. x and y are the waypoint's map coordinate position, the s value is the distance along the road to get to that waypoint in meters, the dx and dy values define the unit normal vector pointing outward of the highway loop.
+## The car is able to drive at least 4.32 miles without incident.
 
-The highway's waypoints loop around so the frenet s value, distance along the road, goes from 0 to 6945.554.
+The car exceeds expectations by achieving **`11.53 miles`** as shown in the screenshot above. 
 
-Here is the data provided from the Simulator to the C++ Program
+## The car drives according to the speed limit.
 
-#### Main car's localization Data (No Noise)
+To meet these criteria I have implemented a speed controller. Whenever the distance between the ego car and the car in front of it drops below the acceptable value the reference velocity would be decreased slowing down the ego car.
+```
+    if ((check_car_speed > car_s) && (car_gap < 27)) {
+        too_close = true;
+        ref_vel -= 0.184; // slowing down if too close
+        std::cout << " Too Close: " << car_gap 
+        << " Ref_Vel: " << ref_vel
+        << std::endl;
+```  
+## Max Acceleration and Jerk are not Exceeded.
 
-["x"] The car's x position in map coordinates
+To counter the loss of speed caused by slow traffic ahead and to maintain the overall speed around the track I have added an algorithm that would gradually increase the speed as the reference velocity drops below a certain value (spaced out in small increments to prevent extreme acceleration).
 
-["y"] The car's y position in map coordinates
+```
+    } else if (ref_vel < 10) { 
+    ref_vel += 0.682;
+    } else if (ref_vel < 20) {
+    ref_vel += 0.442;
+    } else if (ref_vel < 30) {
+    ref_vel += 0.210;
+    } else if (ref_vel < 40) {
+    ref_vel += 0.185;
+    } else if (ref_vel < 45) {
+    ref_vel += 0.105;
+    } else if (ref_vel < 49.4) {
+    ref_vel += 0.098;
+    }
+```
+## Car does not have collisions.
 
-["s"] The car's s position in frenet coordinates
+This very important criterion is met by implementing a lane safety value. Only if specific conditions are met will the ego car choose to merge. To make this feature more efficient I plan to add a cost function in the future. Calculating the cost of merging versus staying behind a slow vehicle.
+```
+    if (too_close) { 
+        int left_lane = lane - 1;
+        if (lane>0 && merge_left_possible && d<(2+4*left_lane+2) && d>(2+4*left_lane-2)) {
+            if ((check_car_speed > car_s) && ((car_gap < 30)) || // if either of these conditions are not met
+            (check_car_speed < car_s) && (car_gap_rear < 40)) {  // merging is not possible    
+                    merge_left_possible = false;
 
-["d"] The car's d position in frenet coordinates
+        int right_lane = lane + 1;
+    if (lane<2 && merge_right_possible && d<(2+4*right_lane+2) && d>(2+4*right_lane-2)) {
+        if ((check_car_speed > car_s) && ((car_gap < 30)) || // if either of these conditions are not met
+        (check_car_speed < car_s) && (car_gap_rear < 40)) {     // merging is not possible    
+                merge_right_possible = false;
+```
+## The car stays in its lane, except for the time between changing lanes.
 
-["yaw"] The car's yaw angle in the map
+This criterion is met by controlling a number of lanes the ego car can change per turn. 
+```
+    if(lane>0 && merge_left_possible && (switch_lanes % 1 == 0)){            
+        std::cout << " Merging <-<-< "
+         << " Ref_Vel: " << ref_vel
+         << " Speed: " << car_speed
+         << std::endl;                
+        lane -= 1;
+        switch_lanes += 1;
 
-["speed"] The car's speed in MPH
+    } else if(lane<2 && merge_right_possible && (switch_lanes % 1 == 0)){
+        std::cout << " Merging >->-> "
+        <<  " Ref_Vel: " << ref_vel
+        << " Speed: " << car_speed
+        << std::endl;
+        lane += 1;
+        switch_lanes += 1;
+```
+Every cycle the ego car will decide if its speed will be greater then the speed of the car in fornt of it. this allows for quick decision making and ease of use.
 
-#### Previous path data given to the Planner
+## The car is able to change lanes.
 
-//Note: Return the previous list but with processed points removed, can be a nice tool to show how far along
-the path has processed since last time. 
-
-["previous_path_x"] The previous list of x points previously given to the simulator
-
-["previous_path_y"] The previous list of y points previously given to the simulator
-
-#### Previous path's end s and d values 
-
-["end_path_s"] The previous list's last point's frenet s value
-
-["end_path_d"] The previous list's last point's frenet d value
-
-#### Sensor Fusion Data, a list of all other car's attributes on the same side of the road. (No Noise)
-
-["sensor_fusion"] A 2d vector of cars and then that car's [car's unique ID, car's x position in map coordinates, car's y position in map coordinates, car's x velocity in m/s, car's y velocity in m/s, car's s position in frenet coordinates, car's d position in frenet coordinates. 
-
-## Details
-
-1. The car uses a perfect controller and will visit every (x,y) point it recieves in the list every .02 seconds. The units for the (x,y) points are in meters and the spacing of the points determines the speed of the car. The vector going from a point to the next point in the list dictates the angle of the car. Acceleration both in the tangential and normal directions is measured along with the jerk, the rate of change of total Acceleration. The (x,y) point paths that the planner recieves should not have a total acceleration that goes over 10 m/s^2, also the jerk should not go over 50 m/s^3. (NOTE: As this is BETA, these requirements might change. Also currently jerk is over a .02 second interval, it would probably be better to average total acceleration over 1 second and measure jerk from that.
-
-2. There will be some latency between the simulator running and the path planner returning a path, with optimized code usually its not very long maybe just 1-3 time steps. During this delay the simulator will continue using points that it was last given, because of this its a good idea to store the last points you have used so you can have a smooth transition. previous_path_x, and previous_path_y can be helpful for this transition since they show the last points given to the simulator controller with the processed points already removed. You would either return a path that extends this previous path or make sure to create a new path that has a smooth transition with this last path.
-
-## Tips
-
-A really helpful resource for doing this project and creating smooth trajectories was using http://kluge.in-chemnitz.de/opensource/spline/, the spline function is in a single hearder file is really easy to use.
-
+This criterion is met by the same algorithms mentioned above. 
