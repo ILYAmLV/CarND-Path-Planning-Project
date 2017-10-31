@@ -2,7 +2,7 @@
 ## Path-Planning - Project 1
 
 <p align="center">
-    <img src="./imgs/img.png" width="800">
+    <img src="./imgs/img.png" width="960">
 </p>
 
 ## Basic Build Instructions
