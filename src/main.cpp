@@ -8,9 +8,9 @@
 #include "Eigen-3.3/Eigen/Core"
 #include "Eigen-3.3/Eigen/QR"
 #include "json.hpp"
+#include "spline.h"
 
 using namespace std;
-
 // for convenience
 using json = nlohmann::json;
 
@@ -196,13 +196,23 @@ int main() {
   	map_waypoints_dy.push_back(d_y);
   }
 
-  h.onMessage([&map_waypoints_x,&map_waypoints_y,&map_waypoints_s,&map_waypoints_dx,&map_waypoints_dy](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
-                     uWS::OpCode opCode) {
+    // Reference velocity
+	double ref_vel = 0.0; //mph
+
+	// Setup lanes
+	int lane = 1;
+
+	// Switch lanes
+	int switch_lanes = 1;
+
+  h.onMessage([&ref_vel,&map_waypoints_x,&map_waypoints_y,&map_waypoints_s,&map_waypoints_dx,&map_waypoints_dy,&lane,&switch_lanes]
+	(uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,uWS::OpCode opCode) {
     // "42" at the start of the message means there's a websocket message event.
     // The 4 signifies a websocket message
     // The 2 signifies a websocket event
-    //auto sdata = string(data).substr(0, length);
-    //cout << sdata << endl;
+	//auto sdata = string(data).substr(0, length);
+	//cout << sdata << endl;
+	
     if (length && length > 2 && data[0] == '4' && data[1] == '2') {
 
       auto s = hasData(data);
@@ -233,13 +243,191 @@ int main() {
           	// Sensor Fusion Data, a list of all other cars on the same side of the road.
           	auto sensor_fusion = j[1]["sensor_fusion"];
 
-          	json msgJson;
+ 			// TODO: define a path made up of (x,y) points that the car will visit sequentially every .02 seconds
+			int prev_size = previous_path_x.size();
 
-          	vector<double> next_x_vals;
-          	vector<double> next_y_vals;
+			if (prev_size > 0) {car_s = end_path_s;}
 
+			bool too_close = false; // initiating values
+			bool merge_left_possible = true;
+			bool merge_right_possible = true;
 
-          	// TODO: define a path made up of (x,y) points that the car will visit sequentially every .02 seconds
+			// Check position all cars from sensor data with data format for each car is: [ id, x, y, vx, vy, s, d]
+			for (int i = 0; i < sensor_fusion.size(); i++) {
+				
+				// Sensor data input
+				double id = sensor_fusion[i][0];
+				double x = sensor_fusion[i][1];
+				double y = sensor_fusion[i][2];
+				double vx = sensor_fusion[i][3];
+				double vy = sensor_fusion[i][4];
+				double check_car_speed = sensor_fusion[i][5];
+				double check_speed = (sqrt(vx * vx + vy * vy)* 0.02);
+			 	check_car_speed += ((double)prev_size * check_speed);
+				double car_gap = check_car_speed - car_s; // calculating the distance between two cars
+				double car_gap_rear = car_s - check_car_speed;
+
+				float d = sensor_fusion[i][6];
+
+				if (d < (2 + 4 * lane + 2) && d >(2 + 4 * lane - 2)) {
+
+				if ((check_car_speed > car_s) && (car_gap < 27)) {
+					too_close = true;
+					ref_vel -= 0.184; // slowing down if too close
+					std::cout << " Too Close: " << car_gap 
+					<< " Ref_Vel: " << ref_vel
+					<< std::endl;
+				}
+			}
+
+			if (too_close) { // this portion was inspired by GitHub user coldKnight
+				int left_lane = lane - 1;
+				if (lane>0 && merge_left_possible && d<(2+4*left_lane+2) && d>(2+4*left_lane-2)) {
+					if ((check_car_speed > car_s) && ((car_gap < 30)) || // if either of these conditions are not met
+					(check_car_speed < car_s) && (car_gap_rear < 40)) {  // merging is not possible	
+							merge_left_possible = false;
+					}
+					
+				}
+			
+				int right_lane = lane + 1; // this portion was inspired by GitHub user coldKnight
+			if (lane<2 && merge_right_possible && d<(2+4*right_lane+2) && d>(2+4*right_lane-2)) {
+				if ((check_car_speed > car_s) && ((car_gap < 30)) || // if either of these conditions are not met
+				(check_car_speed < car_s) && (car_gap_rear < 40)) {	 // merging is not possible	
+						merge_right_possible = false;
+				}
+			}
+		}
+		switch_lanes += 1;
+	}
+
+		if(too_close){
+
+		    if(lane>0 && merge_left_possible && (switch_lanes % 1 == 0)){			
+				std::cout << " Merging <-<-< " // lane merge data
+				 << " Ref_Vel: " << ref_vel
+				 << " Speed: " << car_speed
+				 << std::endl;				
+				lane -= 1;
+				switch_lanes += 1;
+
+		    } else if(lane<2 && merge_right_possible && (switch_lanes % 1 == 0)){
+				std::cout << " Merging >->-> "
+				<<  " Ref_Vel: " << ref_vel
+				<< " Speed: " << car_speed
+				<< std::endl;
+				lane += 1;
+				switch_lanes += 1;
+		    }
+
+			} else if (ref_vel < 10) { // Speed contol inspired by GitHub user Jorcus
+			ref_vel += 0.682;
+			} else if (ref_vel < 20) {
+			ref_vel += 0.442;
+			} else if (ref_vel < 30) {
+			ref_vel += 0.210;
+			} else if (ref_vel < 40) {
+			ref_vel += 0.185;
+			} else if (ref_vel < 45) {
+			ref_vel += 0.105;
+			} else if (ref_vel < 49.4) {
+			ref_vel += 0.098;
+			}
+			
+			// Sensor fusion data // Inspired by GitHub users Jorcus, Yeticoder, Laventura, ColdKnight
+			// Make a list of widely spaced (x,y) waypoints, spaced out by 30m
+			vector < double > x_pts;
+			vector < double > y_pts;
+
+			// reference x,y,yaw states
+			double ref_x = car_x;
+			double ref_y = car_y;
+			double ref_yaw = deg2rad(car_yaw);
+
+			// Use two points that make the path tangent to the car
+			if (prev_size < 2) { 
+				double prev_car_x = car_x - cos(car_yaw);
+				double prev_car_y = car_y - sin(car_yaw);
+				x_pts.push_back(prev_car_x);
+				x_pts.push_back(car_x);
+				y_pts.push_back(prev_car_y);
+				y_pts.push_back(car_y);
+			}
+			else {
+
+				// Reference the previous path's end point as starting point
+				ref_x = previous_path_x[prev_size - 1];
+				ref_y = previous_path_y[prev_size - 1];
+				double ref_x_prev = previous_path_x[prev_size - 2];
+				double ref_y_prev = previous_path_y[prev_size - 2];
+				ref_yaw = atan2(ref_y - ref_y_prev, ref_x - ref_x_prev);
+
+				// Use two points that make the path tangent to the previous path's end point
+				x_pts.push_back(ref_x_prev);
+				x_pts.push_back(ref_x);
+				y_pts.push_back(ref_y_prev);
+				y_pts.push_back(ref_y);
+			}
+
+			// Add evenly spaced points in increments of 30m ahead of the starting reference
+			vector < double > next_wp0 = getXY(car_s + 30, (2 + 4 * lane), map_waypoints_s, map_waypoints_x, map_waypoints_y);
+			vector < double > next_wp1 = getXY(car_s + 60, (2 + 4 * lane), map_waypoints_s, map_waypoints_x, map_waypoints_y);
+			vector < double > next_wp2 = getXY(car_s + 90, (2 + 4 * lane), map_waypoints_s, map_waypoints_x, map_waypoints_y);
+			x_pts.push_back(next_wp0[0]);
+			x_pts.push_back(next_wp1[0]);
+			x_pts.push_back(next_wp2[0]);
+			y_pts.push_back(next_wp0[1]);
+			y_pts.push_back(next_wp1[1]);
+			y_pts.push_back(next_wp2[1]);
+
+			// Transform to Local coordinates
+			for (int i = 0; i < x_pts.size(); i++) {
+				double shift_x = x_pts[i] - ref_x;
+				double shift_y = y_pts[i] - ref_y;
+				x_pts[i] = (shift_x * cos(0 - ref_yaw) - shift_y * sin(0 - ref_yaw));
+				y_pts[i] = (shift_x * sin(0 - ref_yaw) + shift_y * cos(0 - ref_yaw));
+			}
+
+			// Create a spline
+			tk::spline s;
+
+			// Set (x,y) points to spline
+			s.set_points(x_pts, y_pts);
+			vector < double > next_x_vals;
+			vector < double > next_y_vals;
+
+			// Add all of the points from the previous path
+			for (int i = 0; i < previous_path_x.size(); i++) {
+				next_x_vals.push_back(previous_path_x[i]);
+				next_y_vals.push_back(previous_path_y[i]);
+			}
+
+			// Calculate breaking up spline points for ref_vel
+			double target_x = 30;
+			double target_y = s(target_x);
+			double target_dist = sqrt((target_x) * (target_x)+(target_y) * (target_y));
+			double x_add_on = 0;
+
+			// Fill up the rest of the path
+			for (int i = 0; i < 50 - previous_path_x.size(); i++) {
+				double N = (target_dist / (0.02 * ref_vel / 2.24));
+				double x_point = x_add_on + (target_x) / N;
+				double y_point = s(x_point);
+				x_add_on = x_point;
+				double x_ref = x_point;
+				double y_ref = y_point;
+
+				// Transform back to normal
+				x_point = (x_ref * cos(ref_yaw) - y_ref * sin(ref_yaw));
+				y_point = (x_ref * sin(ref_yaw) + y_ref * cos(ref_yaw));
+				x_point += ref_x;
+				y_point += ref_y;
+				next_x_vals.push_back(x_point);
+				next_y_vals.push_back(y_point);
+			}
+
+			json msgJson;
+
           	msgJson["next_x"] = next_x_vals;
           	msgJson["next_y"] = next_y_vals;
 
