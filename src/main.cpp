@@ -271,7 +271,7 @@ int main() {
 
 				if (d < (2 + 4 * lane + 2) && d >(2 + 4 * lane - 2)) {
 
-				if ((check_car_speed > car_s) && (car_gap < 27)) {
+				if ((check_car_speed > car_s) && (car_gap < 26)) {
 					too_close = true;
 					ref_vel -= 0.184; // slowing down if too close
 					std::cout << " Too Close: " << car_gap 
